@@ -1,8 +1,8 @@
 <?php
 /**
- * getAccountDetails.php — Fetch Monnify account for a user.
- * Returns the primary Monnify reserved account in APK-compatible format.
- * PaymentPoint has been fully removed.
+ * getAccountDetails.php — Fetch/generate Monnify account for a user.
+ * ALWAYS returns success:true so the APK never loops.
+ * When account isn't ready, returns status field explaining why.
  */
 
 header("Access-Control-Allow-Origin: *");
@@ -17,21 +17,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 $conn = mysqli_connect("localhost", "adiliqgs_adildata", "adildata2026", "adiliqgs_adildata");
 if (!$conn) {
-    echo json_encode(["success" => false, "message" => "Database connection failed"]);
+    echo json_encode(["success" => true, "status" => "error", "message" => "Database error", "account_number" => "", "bank_name" => "", "account_name" => ""]);
     exit;
 }
 
 // ── Read token ────────────────────────────────────────────────────────────────
-$data         = json_decode(file_get_contents("php://input"), true) ?? [];
+$data          = json_decode(@file_get_contents("php://input"), true) ?? [];
 $incomingToken = $data['token'] ?? $_POST['token'] ?? $_GET['token'] ?? '';
 
 if (empty($incomingToken)) {
-    echo json_encode(["success" => false, "message" => "Token required"]);
+    echo json_encode(["success" => true, "status" => "unauthenticated", "message" => "Token required", "account_number" => "", "bank_name" => "", "account_name" => ""]);
     exit;
 }
 
-// ── Verify token ──────────────────────────────────────────────────────────────
-$q    = mysqli_query($conn, "SELECT id, email, sname, oname, phone, token, monnify_account_details FROM users_tbl WHERE status=1 AND token IS NOT NULL AND token != ''");
+// ── Verify token — include bvn and monnify_account_details ────────────────────
+$q    = mysqli_query($conn, "SELECT id, email, sname, oname, phone, token, monnify_account_details, bvn FROM users_tbl WHERE status=1 AND token IS NOT NULL AND token != ''");
 $user = null;
 while ($row = mysqli_fetch_assoc($q)) {
     if (password_verify($incomingToken, $row['token']) || $incomingToken === $row['token']) {
@@ -41,52 +41,84 @@ while ($row = mysqli_fetch_assoc($q)) {
 }
 
 if (!$user) {
-    echo json_encode(["success" => false, "message" => "Invalid token"]);
+    echo json_encode(["success" => true, "status" => "unauthenticated", "message" => "Invalid token", "account_number" => "", "bank_name" => "", "account_name" => ""]);
     exit;
 }
 
-// ── Check for existing Monnify account ────────────────────────────────────────
+// ── STEP 1: Return account from DB if it already exists ───────────────────────
 if (!empty($user['monnify_account_details'])) {
-    $parts = explode(', ', $user['monnify_account_details']);
-    $first = explode(' - ', trim($parts[0]));
+    $parts   = explode(', ', $user['monnify_account_details']);
+    $first   = explode(' - ', trim($parts[0]));
+    $allAccts = array_map(function($a) {
+        $p = explode(' - ', trim($a));
+        return [
+            "bank_name"      => trim($p[0] ?? ''),
+            "account_number" => trim($p[1] ?? ''),
+            "account_name"   => trim($p[2] ?? ''),
+            "provider"       => "Monnify",
+        ];
+    }, $parts);
     echo json_encode([
         "success"        => true,
+        "status"         => "active",
         "account_number" => trim($first[1] ?? ''),
         "bank_name"      => trim($first[0] ?? ''),
         "account_name"   => trim($first[2] ?? ''),
         "provider"       => "Monnify",
-        "all_accounts"   => array_map(function($a) {
-            $p = explode(' - ', trim($a));
-            return [
-                "bank_name"      => trim($p[0] ?? ''),
-                "account_number" => trim($p[1] ?? ''),
-                "account_name"   => trim($p[2] ?? ''),
-                "provider"       => "Monnify",
-            ];
-        }, $parts),
+        "all_accounts"   => $allAccts,
     ]);
+    mysqli_close($conn);
     exit;
 }
 
-// ── Generate new Monnify account ──────────────────────────────────────────────
+// ── STEP 2: No account in DB yet. Need BVN to generate one. ──────────────────
+if (empty($user['bvn'])) {
+    // Cannot generate without BVN — return success:true so APK stops spinning
+    echo json_encode([
+        "success"        => true,
+        "status"         => "bvn_required",
+        "message"        => "Submit your BVN in the KYC section to activate your virtual account.",
+        "needs_bvn"      => true,
+        "account_number" => "",
+        "bank_name"      => "",
+        "account_name"   => "",
+        "provider"       => "Monnify",
+        "all_accounts"   => [],
+    ]);
+    mysqli_close($conn);
+    exit;
+}
+
+// ── STEP 3: BVN exists — attempt to create Monnify reserved account ───────────
 $fullName = trim($user['sname'] . ' ' . $user['oname']);
+$bvn      = $user['bvn'];
 
 // Fetch Monnify credentials from DB
 $credQ = mysqli_query($conn, "SELECT setting_key, setting_value FROM edutech_settings WHERE setting_key LIKE 'MONNIFY_%'");
 $keys  = [];
 while ($r = mysqli_fetch_assoc($credQ)) $keys[$r['setting_key']] = $r['setting_value'];
 
-$apiKey    = $keys['MONNIFY_API_KEY']     ?? '';
-$apiSecret = $keys['MONNIFY_API_SECRET']  ?? '881J3RXH6Z6LDVJWG76P1YHW8VCECAE5';
+$apiKey    = $keys['MONNIFY_API_KEY']      ?? '';
+$apiSecret = $keys['MONNIFY_API_SECRET']   ?? '881J3RXH6Z6LDVJWG76P1YHW8VCECAE5';
 $baseUrl   = rtrim($keys['MONNIFY_BASE_URL'] ?? 'https://api.monnify.com', '/');
 $contract  = $keys['MONNIFY_API_CONTRACT'] ?? '';
 
 if (empty($apiKey) || empty($contract)) {
-    echo json_encode(["success" => false, "message" => "Monnify credentials not configured"]);
+    echo json_encode([
+        "success"        => true,
+        "status"         => "config_error",
+        "message"        => "Payment provider not configured.",
+        "account_number" => "",
+        "bank_name"      => "",
+        "account_name"   => "",
+        "provider"       => "Monnify",
+        "all_accounts"   => [],
+    ]);
+    mysqli_close($conn);
     exit;
 }
 
-// Step 1: Authenticate
+// Authenticate with Monnify
 $ch = curl_init();
 curl_setopt_array($ch, [
     CURLOPT_URL            => $baseUrl . '/api/v1/auth/login',
@@ -99,26 +131,25 @@ curl_setopt_array($ch, [
 ]);
 $authResp = curl_exec($ch);
 curl_close($ch);
-$authData = json_decode($authResp, true);
-$token    = $authData['responseBody']['accessToken'] ?? null;
+$authData  = json_decode($authResp, true);
+$authToken = $authData['responseBody']['accessToken'] ?? null;
 
-if (!$token) {
-    echo json_encode(["success" => false, "message" => "Monnify authentication failed"]);
-    exit;
-}
-
-// BVN is required by Monnify production API
-if (empty($user['bvn'])) {
+if (!$authToken) {
     echo json_encode([
-        "success"       => false,
-        "message"       => "BVN required",
-        "needs_bvn"     => true,
-        "setup_message" => "Please submit your BVN in the KYC section to activate your virtual account.",
+        "success"        => true,
+        "status"         => "pending",
+        "message"        => "Account setup in progress. Please try again shortly.",
+        "account_number" => "",
+        "bank_name"      => "",
+        "account_name"   => "",
+        "provider"       => "Monnify",
+        "all_accounts"   => [],
     ]);
+    mysqli_close($conn);
     exit;
 }
 
-// Step 2: Create reserved account
+// Create reserved account with BVN
 $accountRef = 'ADIL_' . $user['id'] . '_' . time();
 $payload    = json_encode([
     'accountReference'    => $accountRef,
@@ -128,6 +159,7 @@ $payload    = json_encode([
     'customerEmail'       => $user['email'],
     'customerName'        => $fullName,
     'getAllAvailableBanks' => true,
+    'bvn'                 => $bvn,
 ]);
 
 $ch = curl_init();
@@ -135,38 +167,56 @@ curl_setopt_array($ch, [
     CURLOPT_URL            => $baseUrl . '/api/v2/bank-transfer/reserved-accounts',
     CURLOPT_POST           => true,
     CURLOPT_POSTFIELDS     => $payload,
-    CURLOPT_HTTPHEADER     => [
-        'Authorization: Bearer ' . $token,
-        'Content-Type: application/json',
-    ],
+    CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $authToken, 'Content-Type: application/json'],
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_TIMEOUT        => 30,
     CURLOPT_SSL_VERIFYPEER => false,
 ]);
-$resp  = curl_exec($ch);
-$err   = curl_error($ch);
+$resp = curl_exec($ch);
+$err  = curl_error($ch);
 curl_close($ch);
 
 if ($err) {
-    echo json_encode(["success" => false, "message" => "Network error: $err"]);
+    echo json_encode([
+        "success"        => true,
+        "status"         => "pending",
+        "message"        => "Network issue. Account setup pending.",
+        "account_number" => "",
+        "bank_name"      => "",
+        "account_name"   => "",
+        "provider"       => "Monnify",
+        "all_accounts"   => [],
+    ]);
+    mysqli_close($conn);
     exit;
 }
 
 $result = json_decode($resp, true);
 if (empty($result['requestSuccessful'])) {
-    echo json_encode(["success" => false, "message" => $result['responseMessage'] ?? 'Account creation failed', "raw" => $resp]);
+    $errMsg = $result['responseMessage'] ?? 'Account creation failed';
+    echo json_encode([
+        "success"        => true,
+        "status"         => "error",
+        "message"        => $errMsg,
+        "account_number" => "",
+        "bank_name"      => "",
+        "account_name"   => "",
+        "provider"       => "Monnify",
+        "all_accounts"   => [],
+    ]);
+    mysqli_close($conn);
     exit;
 }
 
+// ── Success — save to DB and return ──────────────────────────────────────────
 $body     = $result['responseBody'] ?? [];
 $accounts = $body['accounts'] ?? [];
 $accName  = $body['accountName'] ?? $fullName;
 
-// Build details string and save to DB
 $parts    = [];
 $allAccts = [];
 foreach ($accounts as $acct) {
-    $bn = $acct['bankName'] ?? '';
+    $bn = $acct['bankName']      ?? '';
     $an = $acct['accountNumber'] ?? '';
     if ($bn && $an) {
         $parts[]    = "$bn - $an - $accName";
@@ -175,7 +225,17 @@ foreach ($accounts as $acct) {
 }
 
 if (empty($parts)) {
-    echo json_encode(["success" => false, "message" => "No accounts returned by Monnify"]);
+    echo json_encode([
+        "success"        => true,
+        "status"         => "pending",
+        "message"        => "Account is being set up. Please try again shortly.",
+        "account_number" => "",
+        "bank_name"      => "",
+        "account_name"   => "",
+        "provider"       => "Monnify",
+        "all_accounts"   => [],
+    ]);
+    mysqli_close($conn);
     exit;
 }
 
@@ -187,6 +247,7 @@ mysqli_query($conn, "UPDATE users_tbl SET monnify_account_details='$ds' WHERE em
 $primary = $allAccts[0];
 echo json_encode([
     "success"        => true,
+    "status"         => "active",
     "account_number" => $primary['account_number'],
     "bank_name"      => $primary['bank_name'],
     "account_name"   => $primary['account_name'],
