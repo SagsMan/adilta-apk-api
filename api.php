@@ -4,7 +4,7 @@
  * Deploy to: api.adildata.com.ng/api.php
  * Usage: https://api.adildata.com.ng/api.php?action=XXX
  *
- * PaymentPoint has been fully removed.
+ * Monnify is the ONLY account provider. No PaymentPoint or legacy fallbacks.
  * All virtual accounts are now generated and served via Monnify only.
  */
 
@@ -467,31 +467,7 @@ case 'funding_accounts':
     $accounts   = parse_monnify_accounts($monnifyRaw);
     $primary    = $accounts[0] ?? null;
 
-    // ── Fallback to legacy PaymentPoint fields if no Monnify account yet ─────
-    if (empty($accounts) && !empty($user['acc_no'])) {
-        $legacyAccount = [
-            'bank_name'      => $user['bank_name'] ?? '',
-            'account_number' => $user['acc_no'],
-            'account_name'   => $user['acc_name'] ?? '',
-            'provider'       => $user['bank_name'] ?? 'Bank',
-        ];
-        api_response([
-            'accounts'       => [$legacyAccount],
-            'has_accounts'   => true,
-            'has_monnify'    => false,
-            'monnify_raw'    => '',
-            'acc_no'         => $user['acc_no'],
-            'bank_name'      => $user['bank_name'] ?? '',
-            'acc_name'       => $user['acc_name'] ?? '',
-            'account_number' => $user['acc_no'],
-            'account_name'   => $user['acc_name'] ?? '',
-            'provider'       => $user['bank_name'] ?? 'Bank',
-            'needs_bvn'      => false,
-            'setup_message'  => '',
-        ]);
-    }
-
-    $needsBvn = empty($accounts) && empty($user['bvn']) && empty($user['acc_no']);
+    $needsBvn = empty($accounts) && empty($user['bvn']);
     api_response([
         'accounts'        => $accounts,
         'has_accounts'    => count($accounts) > 0,
