@@ -65,9 +65,14 @@ function generateBankAccount($email, $name, $phone) {
         return ["success" => false, "message" => "Monnify authentication failed"];
     }
 
+    // Fetch BVN for this user (required by Monnify production)
+    $userBvnQ  = mysqli_query($conn, "SELECT bvn FROM users_tbl WHERE email='$emailSafe' LIMIT 1");
+    $userBvnRow = $userBvnQ ? mysqli_fetch_assoc($userBvnQ) : [];
+    $userBvn   = $userBvnRow['bvn'] ?? '';
+
     // Step 2: Create reserved account
-    $accountRef = 'ADIL_' . $userId . '_' . time();
-    $payload    = json_encode([
+    $accountRef  = 'ADIL_' . $userId . '_' . time();
+    $payloadData = [
         'accountReference'    => $accountRef,
         'accountName'         => $name,
         'currencyCode'        => 'NGN',
@@ -75,7 +80,9 @@ function generateBankAccount($email, $name, $phone) {
         'customerEmail'       => $email,
         'customerName'        => $name,
         'getAllAvailableBanks' => true,
-    ]);
+    ];
+    if (!empty($userBvn)) $payloadData['bvn'] = $userBvn;
+    $payload = json_encode($payloadData);
 
     $ch = curl_init();
     curl_setopt_array($ch, [
