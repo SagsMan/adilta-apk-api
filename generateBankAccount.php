@@ -122,8 +122,7 @@ function generateBankAccount($email, $name, $phone) {
 
     $detailsStr = implode(', ', $parts);
     $ds         = mysqli_real_escape_string($conn, $detailsStr);
-    $rs         = mysqli_real_escape_string($conn, $body['reservationReference'] ?? $accountRef);
-    $updateOk   = mysqli_query($conn, "UPDATE users_tbl SET monnify_account_details='$ds', monnify_account_ref='$rs' WHERE email='$emailSafe'");
+    $updateOk   = mysqli_query($conn, "UPDATE users_tbl SET monnify_account_details='$ds' WHERE email='$emailSafe'");
 
     if ($updateOk) {
         return ["success" => true, "message" => "updated", "details" => $detailsStr];
