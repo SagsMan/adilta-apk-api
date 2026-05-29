@@ -863,6 +863,36 @@ case 'submit_kyc':
     break;
 
 
+  // ── GET KYC STATUS (APK) ──────────────────────────────────────────────────────
+  case 'get_kyc_status':
+      $user = require_auth($conn);
+      $hasBvn     = !empty($user['bvn']);
+      $hasNin     = !empty($user['nin'] ?? '');
+      $hasMonnify = !empty($user['monnify_account_details']);
+
+      $accounts   = parse_monnify_accounts($user['monnify_account_details'] ?? '');
+      $primary    = $accounts[0] ?? null;
+
+      api_response([
+          'kyc_complete'     => ($hasBvn || $hasNin),
+          'has_bvn'          => $hasBvn,
+          'has_nin'          => $hasNin,
+          'has_monnify'      => $hasMonnify,
+          'needs_bvn'        => !$hasBvn && !$hasNin,
+          'account_ready'    => $hasMonnify,
+          'account_number'   => $primary['account_number'] ?? '',
+          'bank_name'        => $primary['bank_name']      ?? '',
+          'account_name'     => $primary['account_name']   ?? '',
+          'acc_no'           => $primary['account_number'] ?? '',
+          'acc_name'         => $primary['account_name']   ?? '',
+          'accounts'         => $accounts,
+          'setup_message'    => (!$hasBvn && !$hasNin)
+              ? 'Submit your BVN or NIN to activate your virtual account.'
+              : ($hasMonnify ? '' : 'Your account is being set up. Please check back shortly.'),
+      ]);
+      break;
+
+
   // ── GET NOTIFICATIONS (APK) ──────────────────────────────────────────────────
   case 'get_notifications':
       $user = require_auth($conn);
