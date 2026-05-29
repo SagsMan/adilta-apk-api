@@ -886,6 +886,83 @@ case 'submit_kyc':
     api_response($responseData);
     break;
 
+
+  // ── GET NOTIFICATIONS (APK) ──────────────────────────────────────────────────
+  case 'get_notifications':
+      $user = require_auth($conn);
+      $emailSafe = mysqli_real_escape_string($conn, $user['email']);
+
+      mysqli_query($conn, "CREATE TABLE IF NOT EXISTS notifications_tbl (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          title VARCHAR(255) NOT NULL,
+          message TEXT NOT NULL,
+          type ENUM('info','success','warning','danger') DEFAULT 'info',
+          target ENUM('all','specific') DEFAULT 'all',
+          target_email VARCHAR(255) NULL,
+          created_by VARCHAR(255) NULL,
+          is_read_by LONGTEXT NULL DEFAULT '[]',
+          status TINYINT(1) DEFAULT 1,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+      $nots = [];
+      $rn = mysqli_query($conn,
+          "SELECT id, title, message, type, target, target_email, is_read_by, created_at
+           FROM notifications_tbl
+           WHERE status = 1 AND (target = 'all' OR target_email = '$emailSafe')
+           ORDER BY id DESC LIMIT 50");
+      if ($rn) {
+          while ($nrow = mysqli_fetch_assoc($rn)) {
+              $readers = json_decode($nrow['is_read_by'] ?: '[]', true);
+              if (!is_array($readers)) $readers = [];
+              $nrow['is_read'] = in_array($user['email'], $readers);
+              unset($nrow['is_read_by']);
+              $nots[] = $nrow;
+          }
+      }
+      $unread_cnt = count(array_filter($nots, fn($n) => !$n['is_read']));
+      api_response(['notifications' => $nots, 'unread_count' => $unread_cnt]);
+      break;
+
+  // ── MARK NOTIFICATION READ (APK) ─────────────────────────────────────────────
+  case 'mark_notification_read':
+      $user = require_auth($conn);
+      $body_n = json_decode(@file_get_contents('php://input'), true) ?? [];
+      $nid = intval($body_n['notification_id'] ?? $_POST['notification_id'] ?? $_GET['notification_id'] ?? 0);
+      if (!$nid) api_error('notification_id required');
+      $rr = mysqli_query($conn, "SELECT is_read_by FROM notifications_tbl WHERE id = $nid AND status = 1 LIMIT 1");
+      if (!$rr || mysqli_num_rows($rr) === 0) api_error('Notification not found', 404);
+      $nrow = mysqli_fetch_assoc($rr);
+      $readers = json_decode($nrow['is_read_by'] ?: '[]', true);
+      if (!is_array($readers)) $readers = [];
+      if (!in_array($user['email'], $readers)) {
+          $readers[] = $user['email'];
+          $rj = mysqli_real_escape_string($conn, json_encode($readers));
+          mysqli_query($conn, "UPDATE notifications_tbl SET is_read_by = '$rj' WHERE id = $nid");
+      }
+      api_response(['message' => 'Marked as read']);
+      break;
+
+  // ── MARK ALL NOTIFICATIONS READ (APK) ────────────────────────────────────────
+  case 'mark_all_notifications_read':
+      $user = require_auth($conn);
+      $es2 = mysqli_real_escape_string($conn, $user['email']);
+      $all = mysqli_query($conn,
+          "SELECT id, is_read_by FROM notifications_tbl WHERE status = 1 AND (target = 'all' OR target_email = '$es2')");
+      if ($all) {
+          while ($arow = mysqli_fetch_assoc($all)) {
+              $readers = json_decode($arow['is_read_by'] ?: '[]', true);
+              if (!is_array($readers)) $readers = [];
+              if (!in_array($user['email'], $readers)) {
+                  $readers[] = $user['email'];
+                  $rj2 = mysqli_real_escape_string($conn, json_encode($readers));
+                  mysqli_query($conn, "UPDATE notifications_tbl SET is_read_by = '$rj2' WHERE id = " . intval($arow['id']));
+              }
+          }
+      }
+      api_response(['message' => 'All notifications marked as read']);
+      break;
+  
 default:
     api_error("Unknown action: '$action'. Available: health, login, register, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, mark_notification_read, referral, change_password, change_pin, submit_kyc", 404);
 }
