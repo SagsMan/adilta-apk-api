@@ -102,8 +102,9 @@ function monnify_login($api_key, $api_secret, $base_url) {
 /**
  * Create a Monnify reserved account for a user.
  * Returns ['success' => bool, 'accounts' => array, 'raw' => string, 'message' => string]
+ * $bvn — optional BVN string (required by some Monnify contracts in production)
  */
-function monnify_create_reserved_account($conn, $email, $fullName, $userId) {
+function monnify_create_reserved_account($conn, $email, $fullName, $userId, $bvn = '') {
     $creds = monnify_get_credentials($conn);
     if (empty($creds['api_key']) || empty($creds['contract'])) {
         return ['success' => false, 'message' => 'Monnify credentials not configured'];
@@ -114,16 +115,21 @@ function monnify_create_reserved_account($conn, $email, $fullName, $userId) {
         return ['success' => false, 'message' => 'Monnify authentication failed'];
     }
 
-    $accountRef = 'ADIL_' . $userId . '_' . time();
-    $payload    = json_encode([
-        'accountReference'  => $accountRef,
-        'accountName'       => $fullName,
-        'currencyCode'      => 'NGN',
-        'contractCode'      => $creds['contract'],
-        'customerEmail'     => $email,
-        'customerName'      => $fullName,
+    $accountRef  = 'ADIL_' . $userId . '_' . time();
+    $payloadData = [
+        'accountReference'    => $accountRef,
+        'accountName'         => $fullName,
+        'currencyCode'        => 'NGN',
+        'contractCode'        => $creds['contract'],
+        'customerEmail'       => $email,
+        'customerName'        => $fullName,
         'getAllAvailableBanks' => true,
-    ]);
+    ];
+    // Production Monnify requires BVN or NIN for reserved account creation
+    if (!empty($bvn) && strlen(preg_replace('/\D/', '', $bvn)) === 11) {
+        $payloadData['bvn'] = preg_replace('/\D/', '', $bvn);
+    }
+    $payload = json_encode($payloadData);
 
     $ch = curl_init();
     curl_setopt_array($ch, [
@@ -237,10 +243,10 @@ case 'login':
     $wq  = mysqli_query($conn, "SELECT balance FROM wallet_tbl WHERE user_id = '$em' LIMIT 1");
     $bal = ($wq && mysqli_num_rows($wq) > 0) ? intval(mysqli_fetch_assoc($wq)['balance']) : 0;
 
-    // Auto-generate Monnify account if user doesn't have one
-    if (empty($user['monnify_account_details'])) {
+    // Auto-generate Monnify account if user doesn't have one (pass BVN if available)
+    if (empty($user['monnify_account_details']) && !empty($user['bvn'])) {
         $fullName = trim($user['sname'] . ' ' . $user['oname']);
-        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id']);
+        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
     }
 
     api_response([
@@ -320,10 +326,10 @@ case 'profile':
     $wq   = mysqli_query($conn, "SELECT balance FROM wallet_tbl WHERE user_id = '$em' LIMIT 1");
     $bal  = ($wq && mysqli_num_rows($wq) > 0) ? intval(mysqli_fetch_assoc($wq)['balance']) : 0;
 
-    // Auto-generate Monnify account if missing
-    if (empty($user['monnify_account_details'])) {
+    // Auto-generate Monnify account if missing (BVN required by Monnify production)
+    if (empty($user['monnify_account_details']) && !empty($user['bvn'])) {
         $fullName = trim($user['sname'] . ' ' . $user['oname']);
-        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id']);
+        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
         // Re-fetch user to get updated details
         $uq   = mysqli_query($conn, "SELECT * FROM users_tbl WHERE email = '$em' LIMIT 1");
         $user = $uq ? mysqli_fetch_assoc($uq) : $user;
@@ -419,10 +425,10 @@ case 'dashboard_stats':
     );
     $rc = $rq ? intval(mysqli_fetch_assoc($rq)['cnt']) : 0;
 
-    // Auto-generate Monnify if missing
-    if (empty($user['monnify_account_details'])) {
+    // Auto-generate Monnify if missing (requires BVN)
+    if (empty($user['monnify_account_details']) && !empty($user['bvn'])) {
         $fullName = trim($user['sname'] . ' ' . $user['oname']);
-        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id']);
+        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
         $uq   = mysqli_query($conn, "SELECT monnify_account_details FROM users_tbl WHERE email='$em' LIMIT 1");
         if ($uq) { $ur = mysqli_fetch_assoc($uq); $user['monnify_account_details'] = $ur['monnify_account_details'] ?? ''; }
     }
@@ -449,33 +455,36 @@ case 'funding_accounts':
     $user = require_auth($conn);
     $em   = mysqli_real_escape_string($conn, $user['email']);
 
-    // Auto-generate Monnify account if user doesn't have one
+    // Auto-generate Monnify account if user doesn't have one (requires BVN for Monnify production)
     if (empty($user['monnify_account_details'])) {
-        $fullName = trim($user['sname'] . ' ' . $user['oname']);
-        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id']);
-        $uq   = mysqli_query($conn, "SELECT monnify_account_details FROM users_tbl WHERE email='$em' LIMIT 1");
-        if ($uq) {
-            $ur  = mysqli_fetch_assoc($uq);
-            $user['monnify_account_details'] = $ur['monnify_account_details'] ?? '';
+        if (!empty($user['bvn'])) {
+            $fullName = trim($user['sname'] . ' ' . $user['oname']);
+            monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
+            $uq  = mysqli_query($conn, "SELECT monnify_account_details FROM users_tbl WHERE email='$em' LIMIT 1");
+            if ($uq) { $ur = mysqli_fetch_assoc($uq); $user['monnify_account_details'] = $ur['monnify_account_details'] ?? ''; }
         }
     }
 
     $monnifyRaw = $user['monnify_account_details'] ?? '';
     $accounts   = parse_monnify_accounts($monnifyRaw);
     $primary    = $accounts[0] ?? null;
+    $needsBvn   = empty($accounts) && empty($user['bvn']);
 
     api_response([
-        'accounts'       => $accounts,
-        'has_accounts'   => count($accounts) > 0,
-        'has_monnify'    => count($accounts) > 0,
-        'monnify_raw'    => $monnifyRaw,
+        'accounts'        => $accounts,
+        'has_accounts'    => count($accounts) > 0,
+        'has_monnify'     => count($accounts) > 0,
+        'monnify_raw'     => $monnifyRaw,
         // Flat APK backward-compatibility fields
-        'acc_no'         => $primary['account_number'] ?? '',
-        'bank_name'      => $primary['bank_name'] ?? '',
-        'acc_name'       => $primary['account_name'] ?? '',
-        'account_number' => $primary['account_number'] ?? '',
-        'account_name'   => $primary['account_name'] ?? '',
-        'provider'       => 'Monnify',
+        'acc_no'          => $primary['account_number'] ?? '',
+        'bank_name'       => $primary['bank_name'] ?? '',
+        'acc_name'        => $primary['account_name'] ?? '',
+        'account_number'  => $primary['account_number'] ?? '',
+        'account_name'    => $primary['account_name'] ?? '',
+        'provider'        => 'Monnify',
+        // Helpful status for the APK to show appropriate UI
+        'needs_bvn'       => $needsBvn,
+        'setup_message'   => $needsBvn ? 'Please submit your BVN via the KYC section to activate your virtual account.' : '',
     ]);
     break;
 
@@ -499,8 +508,13 @@ case 'generate_monnify':
         ]);
     }
 
+    // BVN is required by Monnify production API
+    if (empty($user['bvn'])) {
+        api_error('BVN is required to generate a virtual account. Please submit your BVN first via the KYC section.');
+    }
+
     $fullName = trim($user['sname'] . ' ' . $user['oname']);
-    $result   = monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id']);
+    $result   = monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
 
     if (!$result['success']) {
         api_error('Failed to generate Monnify account: ' . ($result['message'] ?? 'Unknown error'));
@@ -816,7 +830,7 @@ case 'change_pin':
     api_response(['message' => 'PIN changed successfully']);
     break;
 
-// ── SUBMIT KYC ────────────────────────────────────────────────────────────────
+// ── SUBMIT KYC — auto-generates Monnify account after BVN submission ──────────
 case 'submit_kyc':
     $user = require_auth($conn);
     $body = json_decode(@file_get_contents('php://input'), true) ?? [];
@@ -829,7 +843,27 @@ case 'submit_kyc':
     if (!empty($nin) && strlen($nin) === 11) { $sets[] = "nin='" . mysqli_real_escape_string($conn, $nin) . "'"; }
     if (empty($sets)) api_error('BVN and NIN must be 11 digits');
     mysqli_query($conn, "UPDATE users_tbl SET " . implode(', ', $sets) . " WHERE email='$em'");
-    api_response(['message' => 'KYC submitted successfully']);
+
+    // Auto-generate Monnify account after BVN submission if not already created
+    $monnifyResult = null;
+    if (!empty($bvn) && empty($user['monnify_account_details'])) {
+        $fullName      = trim($user['sname'] . ' ' . $user['oname']);
+        $monnifyResult = monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $bvn);
+    }
+
+    $responseData = ['message' => 'KYC submitted successfully'];
+    if ($monnifyResult && $monnifyResult['success']) {
+        $accounts = parse_monnify_accounts($monnifyResult['raw']);
+        $primary  = $accounts[0] ?? null;
+        $responseData['monnify_generated'] = true;
+        $responseData['acc_no']            = $primary['account_number'] ?? '';
+        $responseData['bank_name']         = $primary['bank_name'] ?? '';
+        $responseData['acc_name']          = $primary['account_name'] ?? '';
+        $responseData['account_number']    = $primary['account_number'] ?? '';
+        $responseData['account_name']      = $primary['account_name'] ?? '';
+        $responseData['accounts']          = $accounts;
+    }
+    api_response($responseData);
     break;
 
 default:
