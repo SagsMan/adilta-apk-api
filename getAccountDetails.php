@@ -107,6 +107,17 @@ if (!$token) {
     exit;
 }
 
+// BVN is required by Monnify production API
+if (empty($user['bvn'])) {
+    echo json_encode([
+        "success"       => false,
+        "message"       => "BVN required",
+        "needs_bvn"     => true,
+        "setup_message" => "Please submit your BVN in the KYC section to activate your virtual account.",
+    ]);
+    exit;
+}
+
 // Step 2: Create reserved account
 $accountRef = 'ADIL_' . $user['id'] . '_' . time();
 $payload    = json_encode([
