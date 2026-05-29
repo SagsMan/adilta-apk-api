@@ -166,11 +166,10 @@ function monnify_create_reserved_account($conn, $email, $fullName, $userId) {
     $detailsStr = implode(', ', $parts);
     $refStr     = $body['reservationReference'] ?? $accountRef;
 
-    // Save to DB
+    // Save to DB (monnify_account_details is the only column available)
     $em   = mysqli_real_escape_string($conn, $email);
     $ds   = mysqli_real_escape_string($conn, $detailsStr);
-    $rs   = mysqli_real_escape_string($conn, $refStr);
-    mysqli_query($conn, "UPDATE users_tbl SET monnify_account_details='$ds', monnify_account_ref='$rs' WHERE email='$em'");
+    mysqli_query($conn, "UPDATE users_tbl SET monnify_account_details='$ds' WHERE email='$em'");
 
     return [
         'success'  => !empty($parts),
