@@ -450,39 +450,59 @@ case 'dashboard_stats':
     ]);
     break;
 
-// ── FUNDING ACCOUNTS (Monnify only) ──────────────────────────────────────────
+// ── FUNDING ACCOUNTS ──────────────────────────────────────────────────────────
 case 'funding_accounts':
     $user = require_auth($conn);
     $em   = mysqli_real_escape_string($conn, $user['email']);
 
-    // Auto-generate Monnify account if user doesn't have one (requires BVN for Monnify production)
-    if (empty($user['monnify_account_details'])) {
-        if (!empty($user['bvn'])) {
-            $fullName = trim($user['sname'] . ' ' . $user['oname']);
-            monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
-            $uq  = mysqli_query($conn, "SELECT monnify_account_details FROM users_tbl WHERE email='$em' LIMIT 1");
-            if ($uq) { $ur = mysqli_fetch_assoc($uq); $user['monnify_account_details'] = $ur['monnify_account_details'] ?? ''; }
-        }
+    // Auto-generate Monnify account if user has BVN but no Monnify account yet
+    if (empty($user['monnify_account_details']) && !empty($user['bvn'])) {
+        $fullName = trim($user['sname'] . ' ' . $user['oname']);
+        monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
+        $uq = mysqli_query($conn, "SELECT monnify_account_details FROM users_tbl WHERE email='$em' LIMIT 1");
+        if ($uq) { $ur = mysqli_fetch_assoc($uq); $user['monnify_account_details'] = $ur['monnify_account_details'] ?? ''; }
     }
 
     $monnifyRaw = $user['monnify_account_details'] ?? '';
     $accounts   = parse_monnify_accounts($monnifyRaw);
     $primary    = $accounts[0] ?? null;
-    $needsBvn   = empty($accounts) && empty($user['bvn']);
 
+    // ── Fallback to legacy PaymentPoint fields if no Monnify account yet ─────
+    if (empty($accounts) && !empty($user['acc_no'])) {
+        $legacyAccount = [
+            'bank_name'      => $user['bank_name'] ?? '',
+            'account_number' => $user['acc_no'],
+            'account_name'   => $user['acc_name'] ?? '',
+            'provider'       => $user['bank_name'] ?? 'Bank',
+        ];
+        api_response([
+            'accounts'       => [$legacyAccount],
+            'has_accounts'   => true,
+            'has_monnify'    => false,
+            'monnify_raw'    => '',
+            'acc_no'         => $user['acc_no'],
+            'bank_name'      => $user['bank_name'] ?? '',
+            'acc_name'       => $user['acc_name'] ?? '',
+            'account_number' => $user['acc_no'],
+            'account_name'   => $user['acc_name'] ?? '',
+            'provider'       => $user['bank_name'] ?? 'Bank',
+            'needs_bvn'      => false,
+            'setup_message'  => '',
+        ]);
+    }
+
+    $needsBvn = empty($accounts) && empty($user['bvn']) && empty($user['acc_no']);
     api_response([
         'accounts'        => $accounts,
         'has_accounts'    => count($accounts) > 0,
         'has_monnify'     => count($accounts) > 0,
         'monnify_raw'     => $monnifyRaw,
-        // Flat APK backward-compatibility fields
         'acc_no'          => $primary['account_number'] ?? '',
         'bank_name'       => $primary['bank_name'] ?? '',
         'acc_name'        => $primary['account_name'] ?? '',
         'account_number'  => $primary['account_number'] ?? '',
         'account_name'    => $primary['account_name'] ?? '',
         'provider'        => 'Monnify',
-        // Helpful status for the APK to show appropriate UI
         'needs_bvn'       => $needsBvn,
         'setup_message'   => $needsBvn ? 'Please submit your BVN via the KYC section to activate your virtual account.' : '',
     ]);
