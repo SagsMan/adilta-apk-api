@@ -171,8 +171,7 @@ if (empty($parts)) {
 $detailsStr = implode(', ', $parts);
 $em         = mysqli_real_escape_string($conn, $user['email']);
 $ds         = mysqli_real_escape_string($conn, $detailsStr);
-$rs         = mysqli_real_escape_string($conn, $body['reservationReference'] ?? $accountRef);
-mysqli_query($conn, "UPDATE users_tbl SET monnify_account_details='$ds', monnify_account_ref='$rs' WHERE email='$em'");
+mysqli_query($conn, "UPDATE users_tbl SET monnify_account_details='$ds' WHERE email='$em'");
 
 $primary = $allAccts[0];
 echo json_encode([
