@@ -31,7 +31,7 @@ if (empty($incomingToken)) {
 }
 
 // ── Verify token — include bvn, monnify, and legacy PaymentPoint fields ───────
-$q    = mysqli_query($conn, "SELECT id, email, sname, oname, phone, token, monnify_account_details, bvn, acc_no, acc_name, bank_name FROM users_tbl WHERE status=1 AND token IS NOT NULL AND token != ''");
+$q    = mysqli_query($conn, "SELECT id, email, sname, oname, phone, token, monnify_account_details, bvn FROM users_tbl WHERE status=1 AND token IS NOT NULL AND token != ''");
 $user = null;
 while ($row = mysqli_fetch_assoc($q)) {
     if (password_verify($incomingToken, $row['token']) || $incomingToken === $row['token']) {
@@ -71,27 +71,7 @@ if (!empty($user['monnify_account_details'])) {
     exit;
 }
 
-// ── STEP 2: No Monnify account. Fall back to legacy PaymentPoint fields. ─────
-if (!empty($user['acc_no'])) {
-    echo json_encode([
-        "success"        => true,
-        "status"         => "legacy",
-        "account_number" => $user['acc_no'],
-        "bank_name"      => $user['bank_name'] ?? '',
-        "account_name"   => $user['acc_name']  ?? '',
-        "provider"       => $user['bank_name'] ?? 'Bank',
-        "all_accounts"   => [[
-            "bank_name"      => $user['bank_name'] ?? '',
-            "account_number" => $user['acc_no'],
-            "account_name"   => $user['acc_name'] ?? '',
-            "provider"       => $user['bank_name'] ?? 'Bank',
-        ]],
-    ]);
-    mysqli_close($conn);
-    exit;
-}
-
-// ── STEP 3: No account at all. Need BVN to generate Monnify. ─────────────────
+// ── STEP 2: No account yet. Need BVN to generate Monnify. ─────────────────
 if (empty($user['bvn'])) {
     // Cannot generate without BVN — return success:true so APK stops spinning
     echo json_encode([
