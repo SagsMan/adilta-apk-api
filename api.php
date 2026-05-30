@@ -743,29 +743,46 @@ case 'data_plans':
 case 'notifications':
     $user = require_auth($conn);
     $em   = mysqli_real_escape_string($conn, $user['email']);
+    mysqli_query($conn, "CREATE TABLE IF NOT EXISTS notifications_tbl (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        type ENUM('info','success','warning','danger') DEFAULT 'info',
+        target ENUM('all','specific') DEFAULT 'all',
+        target_email VARCHAR(255) NULL,
+        created_by VARCHAR(255) NULL,
+        is_read_by LONGTEXT NULL DEFAULT '[]',
+        status TINYINT(1) DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     $q    = mysqli_query($conn,
         "SELECT * FROM notifications_tbl WHERE status=1 AND (target='all' OR target_email='$em') ORDER BY id DESC LIMIT 50"
     );
     $rows = [];
     while ($row = mysqli_fetch_assoc($q)) {
-        $readers     = json_decode($row['is_read_by'] ?: '[]', true);
-        $row['read'] = in_array($user['email'], $readers);
+        $readers          = json_decode($row['is_read_by'] ?: '[]', true);
+        $row['read']      = in_array($user['email'], $readers);
+        $row['is_read']   = $row['read'];
         unset($row['is_read_by']);
         $rows[] = $row;
     }
-    api_response(['notifications' => $rows]);
+    $unread = count(array_filter($rows, fn($n) => !$n['is_read']));
+    api_response(['notifications' => $rows, 'unread_count' => $unread]);
     break;
 
 // ── MARK NOTIFICATION READ ────────────────────────────────────────────────────
 case 'mark_notification_read':
-    $user = require_auth($conn);
-    $body = json_decode(@file_get_contents('php://input'), true) ?? [];
-    $id   = intval($body['id'] ?? $_POST['id'] ?? $_GET['id'] ?? 0);
-    if (!$id) api_error('Notification ID required');
+    $user   = require_auth($conn);
+    $body   = json_decode(@file_get_contents('php://input'), true) ?? [];
+    // Accept both 'id' (web) and 'notification_id' (APK)
+    $id     = intval($body['notification_id'] ?? $_POST['notification_id'] ?? $_GET['notification_id']
+                  ?? $body['id']            ?? $_POST['id']            ?? $_GET['id']            ?? 0);
+    if (!$id) api_error('notification_id required');
     $q = mysqli_query($conn, "SELECT is_read_by FROM notifications_tbl WHERE id=$id AND status=1 LIMIT 1");
     if (!$q || mysqli_num_rows($q) === 0) api_error('Notification not found', 404);
     $row     = mysqli_fetch_assoc($q);
     $readers = json_decode($row['is_read_by'] ?: '[]', true);
+    if (!is_array($readers)) $readers = [];
     if (!in_array($user['email'], $readers)) {
         $readers[] = $user['email'];
         $rj = mysqli_real_escape_string($conn, json_encode($readers));
@@ -930,24 +947,51 @@ case 'submit_kyc':
       api_response(['notifications' => $nots, 'unread_count' => $unread_cnt]);
       break;
 
-  // ── MARK NOTIFICATION READ (APK) ─────────────────────────────────────────────
-  case 'mark_notification_read':
-      $user = require_auth($conn);
-      $body_n = json_decode(@file_get_contents('php://input'), true) ?? [];
-      $nid = intval($body_n['notification_id'] ?? $_POST['notification_id'] ?? $_GET['notification_id'] ?? 0);
-      if (!$nid) api_error('notification_id required');
-      $rr = mysqli_query($conn, "SELECT is_read_by FROM notifications_tbl WHERE id = $nid AND status = 1 LIMIT 1");
-      if (!$rr || mysqli_num_rows($rr) === 0) api_error('Notification not found', 404);
-      $nrow = mysqli_fetch_assoc($rr);
-      $readers = json_decode($nrow['is_read_by'] ?: '[]', true);
-      if (!is_array($readers)) $readers = [];
-      if (!in_array($user['email'], $readers)) {
-          $readers[] = $user['email'];
-          $rj = mysqli_real_escape_string($conn, json_encode($readers));
-          mysqli_query($conn, "UPDATE notifications_tbl SET is_read_by = '$rj' WHERE id = $nid");
-      }
-      api_response(['message' => 'Marked as read']);
-      break;
+// ── GET UNREAD COUNT (APK bell badge) ────────────────────────────────────────
+case 'get_unread_count':
+    $user = require_auth($conn);
+    $es   = mysqli_real_escape_string($conn, $user['email']);
+    $rn   = mysqli_query($conn,
+        "SELECT id, is_read_by FROM notifications_tbl WHERE status=1 AND (target='all' OR target_email='$es')");
+    $unread = 0;
+    if ($rn) {
+        while ($nr = mysqli_fetch_assoc($rn)) {
+            $rd = json_decode($nr['is_read_by'] ?: '[]', true);
+            if (!is_array($rd) || !in_array($user['email'], $rd)) $unread++;
+        }
+    }
+    api_response(['unread_count' => $unread]);
+    break;
+
+// ── GET REFERRAL STATS (APK) ──────────────────────────────────────────────────
+case 'get_referral_stats':
+    $user = require_auth($conn);
+    $em   = mysqli_real_escape_string($conn, $user['email']);
+
+    $rq = mysqli_query($conn,
+        "SELECT u.sname, u.oname, u.email, u.date_join
+         FROM referal_tbl rt
+         JOIN users_tbl u ON u.email = (SELECT email FROM users_tbl WHERE MD5(email) = rt.referee LIMIT 1)
+         WHERE rt.referal = (SELECT referal_token FROM users_tbl WHERE email='$em' LIMIT 1)
+         ORDER BY rt.id DESC");
+    $referred = [];
+    if ($rq) while ($r = mysqli_fetch_assoc($rq)) $referred[] = $r;
+
+    $tq    = mysqli_query($conn,
+        "SELECT COALESCE(SUM(earn_amount),0) as total FROM referal_earn_transaction_tbl WHERE referal_email='$em'");
+    $total = $tq ? intval(mysqli_fetch_assoc($tq)['total'] ?? 0) : 0;
+
+    $refCode = $user['referal_token'] ?? '';
+    api_response([
+        'referral_code'     => $refCode,
+        'referral_link'     => 'https://adildata.com.ng/easyfinder/dashboard/register?join_with_referal=' . $refCode,
+        'total_referred'    => count($referred),
+        'total_earnings'    => $total,
+        'referred_users'    => $referred,
+        'share_message'     => 'Join Adildata and earn on every data, airtime purchase! Use my referral code: ' . $refCode
+                               . ' — Sign up at https://adildata.com.ng/easyfinder/dashboard/register?join_with_referal=' . $refCode,
+    ]);
+    break;
 
   // ── MARK ALL NOTIFICATIONS READ (APK) ────────────────────────────────────────
   case 'mark_all_notifications_read':
