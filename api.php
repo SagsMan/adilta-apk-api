@@ -912,6 +912,78 @@ case 'change_password':
     api_response(['message' => 'Password changed successfully']);
     break;
 
+// ── VERIFY TOKEN / FINGERPRINT AUTH ──────────────────────────────────────────
+// Used by APK on startup and fingerprint login to validate a stored token.
+case 'verify_token':
+    $incomingToken = get_token_from_request();
+    if (empty($incomingToken)) api_error('Token is required', 400);
+
+    $ts = mysqli_real_escape_string($conn, $incomingToken);
+
+    // Fast path: plain token direct lookup
+    $q = mysqli_query($conn,
+        "SELECT id, sname, oname, email, phone, pin, finger, monnify_account_details
+           FROM users_tbl
+          WHERE token = '$ts' AND status = 1 LIMIT 1");
+
+    if ($q && mysqli_num_rows($q) > 0) {
+        $row = mysqli_fetch_assoc($q);
+        $em  = mysqli_real_escape_string($conn, $row['email']);
+        $wq  = mysqli_query($conn, "SELECT balance FROM wallet_tbl WHERE user_id='$em' LIMIT 1");
+        $bal = ($wq && mysqli_num_rows($wq) > 0) ? floatval(mysqli_fetch_assoc($wq)['balance']) : 0;
+        $mAccounts = parse_monnify_accounts($row['monnify_account_details'] ?? '');
+        $primary   = $mAccounts[0] ?? null;
+        api_response([
+            'valid'          => true,
+            'user_id'        => $row['id'],
+            'email'          => $row['email'],
+            'name'           => trim($row['sname'] . ' ' . $row['oname']),
+            'phone'          => $row['phone'],
+            'haspin'         => !empty($row['pin']),
+            'finger'         => (bool)$row['finger'],
+            'wallet_balance' => $bal,
+            'acc_no'         => $primary['account_number'] ?? '',
+            'bank_name'      => $primary['bank_name'] ?? '',
+            'acc_name'       => $primary['account_name'] ?? '',
+        ]);
+    }
+
+    // Legacy fallback: bcrypt-hashed tokens (old sessions)
+    $q2 = mysqli_query($conn,
+        "SELECT id, sname, oname, email, phone, pin, finger, monnify_account_details
+           FROM users_tbl
+          WHERE token LIKE '\$2y\$%' AND status = 1
+          ORDER BY id DESC LIMIT 200");
+    if ($q2) {
+        while ($row = mysqli_fetch_assoc($q2)) {
+            if (password_verify($incomingToken, $row['token'])) {
+                // Migrate to plain token for future fast-path lookups
+                mysqli_query($conn, "UPDATE users_tbl SET token='$ts' WHERE id=" . intval($row['id']));
+                $em  = mysqli_real_escape_string($conn, $row['email']);
+                $wq  = mysqli_query($conn, "SELECT balance FROM wallet_tbl WHERE user_id='$em' LIMIT 1");
+                $bal = ($wq && mysqli_num_rows($wq) > 0) ? floatval(mysqli_fetch_assoc($wq)['balance']) : 0;
+                $mAccounts = parse_monnify_accounts($row['monnify_account_details'] ?? '');
+                $primary   = $mAccounts[0] ?? null;
+                api_response([
+                    'valid'          => true,
+                    'user_id'        => $row['id'],
+                    'email'          => $row['email'],
+                    'name'           => trim($row['sname'] . ' ' . $row['oname']),
+                    'phone'          => $row['phone'],
+                    'haspin'         => !empty($row['pin']),
+                    'finger'         => (bool)$row['finger'],
+                    'wallet_balance' => $bal,
+                    'acc_no'         => $primary['account_number'] ?? '',
+                    'bank_name'      => $primary['bank_name'] ?? '',
+                    'acc_name'       => $primary['account_name'] ?? '',
+                ]);
+            }
+        }
+    }
+
+    api_error('Invalid or expired token', 401);
+    break;
+
 // ── CHANGE PIN ────────────────────────────────────────────────────────────────
 case 'change_pin':
     $user = require_auth($conn);
@@ -927,7 +999,7 @@ case 'change_pin':
     break;
 
 default:
-    api_error("Unknown action: '$action'. Available: health, login, register, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
+    api_error("Unknown action: '$action'. Available: health, login, register, verify_token, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
 }
 
 mysqli_close($conn);
