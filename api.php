@@ -1000,7 +1000,20 @@ case 'verify_token':
     api_error('Invalid or expired token', 401);
     break;
 
-// ── CHANGE PIN ────────────────────────────────────────────────────────────────
+// ── SET PIN (first-time PIN setup, no old PIN required) ─────────────────────
+  case 'set_pin':
+      $user = require_auth($conn);
+      $body = json_decode(@file_get_contents('php://input'), true) ?? [];
+      $pin  = trim($body['pin'] ?? $_POST['pin'] ?? '');
+      if (empty($pin)) api_error('pin is required');
+      if (!preg_match('/^\d{4,6}$/', $pin)) api_error('PIN must be 4–6 digits');
+      $hashedPin = md5($pin);
+      $em        = mysqli_real_escape_string($conn, $user['email']);
+      mysqli_query($conn, "UPDATE users_tbl SET pin='$hashedPin' WHERE email='$em'");
+      api_response(['message' => 'PIN set successfully']);
+      break;
+
+  // ── CHANGE PIN ────────────────────────────────────────────────────────────────
 case 'change_pin':
     $user = require_auth($conn);
     $body = json_decode(@file_get_contents('php://input'), true) ?? [];
@@ -1015,7 +1028,7 @@ case 'change_pin':
     break;
 
 default:
-    api_error("Unknown action: '$action'. Available: health, login, register, verify_token, toggle_fingerprint, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
+    api_error("Unknown action: '$action'. Available: health, login, register, verify_token, toggle_fingerprint, set_pin, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
 }
 
 mysqli_close($conn);
