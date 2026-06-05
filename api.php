@@ -912,7 +912,20 @@ case 'change_password':
     api_response(['message' => 'Password changed successfully']);
     break;
 
-// ── TOGGLE FINGERPRINT ────────────────────────────────────────────────────────
+// ── CHECK FINGERPRINT (email-based, no token required) ──────────────────────
+  // Called by APK on the login screen to decide whether to show fingerprint button.
+  case 'check_fingerprint':
+      $body  = json_decode(@file_get_contents('php://input'), true) ?? [];
+      $email = trim($body['email'] ?? $_GET['email'] ?? $_POST['email'] ?? '');
+      if (empty($email)) api_error('email is required');
+      $em = mysqli_real_escape_string($conn, $email);
+      $q  = mysqli_query($conn, "SELECT finger FROM users_tbl WHERE email='$em' AND status=1 LIMIT 1");
+      if (!$q || mysqli_num_rows($q) === 0) api_error('User not found', 404);
+      $row = mysqli_fetch_assoc($q);
+      api_response(['finger' => (bool)(int)$row['finger'], 'email' => $email]);
+      break;
+
+  // ── TOGGLE FINGERPRINT ────────────────────────────────────────────────────────
 case 'toggle_fingerprint':
     $user   = require_auth($conn);
     $em     = mysqli_real_escape_string($conn, $user['email']);
@@ -1028,7 +1041,7 @@ case 'change_pin':
     break;
 
 default:
-    api_error("Unknown action: '$action'. Available: health, login, register, verify_token, toggle_fingerprint, set_pin, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
+    api_error("Unknown action: '$action'. Available: health, login, register, verify_token, check_fingerprint, toggle_fingerprint, set_pin, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
 }
 
 mysqli_close($conn);
