@@ -912,6 +912,22 @@ case 'change_password':
     api_response(['message' => 'Password changed successfully']);
     break;
 
+// ── TOGGLE FINGERPRINT ────────────────────────────────────────────────────────
+case 'toggle_fingerprint':
+    $user   = require_auth($conn);
+    $em     = mysqli_real_escape_string($conn, $user['email']);
+    $cur    = mysqli_query($conn, "SELECT finger FROM users_tbl WHERE email='$em' LIMIT 1");
+    if (!$cur || mysqli_num_rows($cur) === 0) api_error('User not found', 404);
+    $row    = mysqli_fetch_assoc($cur);
+    $newVal = intval($row['finger']) === 1 ? 0 : 1;
+    $upd    = mysqli_query($conn, "UPDATE users_tbl SET finger='$newVal' WHERE email='$em'");
+    if (!$upd) api_error('Failed to update fingerprint setting');
+    api_response([
+        'finger'  => (bool)$newVal,
+        'message' => $newVal ? 'Fingerprint enabled' : 'Fingerprint disabled',
+    ]);
+    break;
+
 // ── VERIFY TOKEN / FINGERPRINT AUTH ──────────────────────────────────────────
 // Used by APK on startup and fingerprint login to validate a stored token.
 case 'verify_token':
@@ -999,7 +1015,7 @@ case 'change_pin':
     break;
 
 default:
-    api_error("Unknown action: '$action'. Available: health, login, register, verify_token, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
+    api_error("Unknown action: '$action'. Available: health, login, register, verify_token, toggle_fingerprint, profile, wallet, wallet_history, transactions, dashboard_stats, funding_accounts, generate_monnify, verify_monnify, buy_airtime, buy_data, data_plans, notifications, get_notifications, get_unread_count, mark_notification_read, mark_all_notifications_read, referral, get_referral_stats, change_password, change_pin, submit_kyc, get_kyc_status", 404);
 }
 
 mysqli_close($conn);
