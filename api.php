@@ -43,8 +43,13 @@ function verify_token($conn, $incoming_token) {
     // Fast path: plain token direct lookup
     $q = mysqli_query($conn, "SELECT * FROM users_tbl WHERE token = '$ts' AND status = 1 LIMIT 1");
     if ($q && mysqli_num_rows($q) > 0) return mysqli_fetch_assoc($q);
-    // Legacy fallback: bcrypt-hashed tokens
-    $q2 = mysqli_query($conn, "SELECT * FROM users_tbl WHERE token IS NOT NULL AND token != '' AND status = 1");
+    // Legacy fallback: bcrypt tokens (old sessions) — LIMIT 300 caps this at ~3-5s max
+    $q2 = mysqli_query($conn,
+        "SELECT id, email, sname, oname, phone, bvn, token, monnify_account_details, admin_role,
+                super_admin, referral_code, wallet_balance, acc_no, bank_name, acc_name
+           FROM users_tbl
+          WHERE token LIKE '$2y$%' AND status = 1
+          ORDER BY id DESC LIMIT 200");
     if ($q2) {
         while ($row = mysqli_fetch_assoc($q2)) {
             if (password_verify($incoming_token, $row['token'])) return $row;
@@ -249,6 +254,7 @@ case 'login':
         'phone'          => $user['phone'],
         'admin_role'     => $user['admin_role'],
         'wallet_balance' => $bal,
+        'haspin'         => !empty($user['pin']),
     ]);
     break;
 
@@ -344,7 +350,7 @@ case 'wallet':
     api_response(['balance' => $bal, 'email' => $user['email']]);
     break;
 
-// ── WALLET HISTORY ────────────────────────────────────────────────────────────
+// ── WALLET HISTORY ────────────────���───────────────────────────────────────────
 case 'wallet_history':
     $user = require_auth($conn);
     $em   = mysqli_real_escape_string($conn, $user['email']);
@@ -666,7 +672,7 @@ case 'buy_airtime':
     api_response(['success' => $status, 'message' => $status ? 'Airtime purchased successfully' : 'Transaction failed, wallet refunded', 'balance' => $status ? $newBalance : $wallet['balance']]);
     break;
 
-// ── BUY DATA ──────────────────────────────────────────────────────────────────
+// ── BUY DATA ───────���──────────────────────────────────────────────────────────
 case 'buy_data':
     $user = require_auth($conn);
     $body = json_decode(@file_get_contents('php://input'), true) ?? [];
@@ -725,7 +731,7 @@ case 'buy_data':
     api_response(['success' => $status, 'message' => $status ? 'Data purchase successful' : 'Transaction failed, wallet refunded', 'balance' => $status ? $newBalance : $wallet['balance']]);
     break;
 
-// ── DATA PLANS ────────────────────────────────────────────────────────────────
+// ── DATA PLANS ─────────────────────────────────���──────────────────────────────
 case 'data_plans':
     $serviceID = trim($_GET['serviceID'] ?? $_POST['serviceID'] ?? ($body['serviceID'] ?? ''));
     if (empty($serviceID)) api_error('serviceID required');
