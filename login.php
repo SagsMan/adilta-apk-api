@@ -85,7 +85,7 @@ echo json_encode([
     "success"        => true,
     "message"        => "Login successful",
     "token"          => $rawToken,
-    "finger"         => $user['finger'],
+    "finger"         => (bool)(int)$user['finger'],
     "account_status" => !empty($accNo) ? "active" : "pending",
     "account_number" => $accNo,
     "account_name"   => $accName,
