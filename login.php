@@ -7,7 +7,6 @@ header("Content-Type: application/json");
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(200); exit(); }
 
 include_once 'conn.php';
-require_once 'generateBankAccount.php';
 
 $data     = json_decode(file_get_contents("php://input"), true);
 $response = ["success" => false, "message" => ""];
@@ -32,9 +31,10 @@ if (!password_verify($password, $user['password'])) {
     echo json_encode($response); exit;
 }
 
+// Store plain hex token — fast-path verifiable by verifyToken.php and api.php
 $rawToken = bin2hex(random_bytes(32));
-$token    = password_hash($rawToken, PASSWORD_BCRYPT);
-mysqli_query($conn, "UPDATE users_tbl SET token='$token' WHERE id=" . $user['id']);
+$ts       = mysqli_real_escape_string($conn, $rawToken);
+mysqli_query($conn, "UPDATE users_tbl SET token='$ts' WHERE id=" . intval($user['id']));
 
 // Wipe any old non-Monnify account data silently
 $bn = strtolower($user['bank_name'] ?? '');
@@ -46,40 +46,39 @@ if (
         strpos($an, 'rahausub') !== false
     )
 ) {
-    mysqli_query($conn, "UPDATE users_tbl SET acc_no='', acc_name='', bank_name='', acc_no2='', acc_name2='', bank_name2='' WHERE id=" . $user['id']);
+    mysqli_query($conn, "UPDATE users_tbl SET acc_no='', acc_name='', bank_name='', acc_no2='', acc_name2='', bank_name2='' WHERE id=" . intval($user['id']));
     $user['acc_no'] = $user['acc_name'] = $user['bank_name'] = '';
 }
 
-// Read Monnify account
+// Parse Monnify account details (stored as "BankName - AccountNumber - AccountName, ...")
+function parse_monnify_str($raw) {
+    $accounts = [];
+    if (empty($raw)) return $accounts;
+    foreach (explode(', ', $raw) as $acct) {
+        $p = explode(' - ', trim($acct));
+        if (count($p) >= 2) {
+            $accounts[] = [
+                'bank_name'      => trim($p[0]),
+                'account_number' => trim($p[1]),
+                'account_name'   => trim($p[2] ?? ''),
+            ];
+        }
+    }
+    return $accounts;
+}
+
 $accNo = $accName = $bankName = '';
-$md = json_decode($user['monnify_account_details'] ?? '', true);
-if (!empty($md['accounts'])) {
-    $accNo    = $md['accounts'][0]['accountNumber'] ?? '';
-    $accName  = $md['accountName'] ?? '';
-    $bankName = $md['accounts'][0]['bankName'] ?? '';
+$monnifyRaw = $user['monnify_account_details'] ?? '';
+$mAccounts  = parse_monnify_str($monnifyRaw);
+
+if (!empty($mAccounts)) {
+    $accNo    = $mAccounts[0]['account_number'];
+    $accName  = $mAccounts[0]['account_name'];
+    $bankName = $mAccounts[0]['bank_name'];
 } elseif (!empty($user['acc_no'])) {
     $accNo    = $user['acc_no'];
     $accName  = $user['acc_name'];
     $bankName = $user['bank_name'];
-}
-
-// Try generating if still empty
-if (empty($accNo)) {
-    $fullName  = trim($user['sname'] . ' ' . $user['oname']);
-    $generated = generateBankAccount($user['email'], $fullName, $user['phone']);
-    if ($generated['success']) {
-        $fresh = mysqli_fetch_assoc(mysqli_query($conn, "SELECT acc_no, acc_name, bank_name, monnify_account_details FROM users_tbl WHERE id=" . $user['id']));
-        $md2   = json_decode($fresh['monnify_account_details'] ?? '', true);
-        if (!empty($md2['accounts'])) {
-            $accNo    = $md2['accounts'][0]['accountNumber'] ?? '';
-            $accName  = $md2['accountName'] ?? '';
-            $bankName = $md2['accounts'][0]['bankName'] ?? '';
-        } else {
-            $accNo    = $fresh['acc_no']    ?? '';
-            $accName  = $fresh['acc_name']  ?? '';
-            $bankName = $fresh['bank_name'] ?? '';
-        }
-    }
 }
 
 echo json_encode([
