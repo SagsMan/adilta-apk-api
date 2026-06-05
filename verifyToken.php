@@ -23,7 +23,7 @@ $ts = mysqli_real_escape_string($conn, $incomingToken);
 
 // ── Fast path: plain token direct lookup (covers all new logins) ──────────────
 $q = mysqli_query($conn,
-    "SELECT id, sname, oname, email, phone, pin, finger, wallet_balance
+    "SELECT id, sname, oname, email, phone, pin, finger
        FROM users_tbl
       WHERE token = '$ts' AND status = 1 LIMIT 1");
 
