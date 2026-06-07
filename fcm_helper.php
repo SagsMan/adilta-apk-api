@@ -12,7 +12,7 @@
  */
 
 define('FIREBASE_SERVICE_ACCOUNT_PATH', '/home/adiliqgs/firebase_service_account.json');
-define('FIREBASE_PROJECT_ID', 'YOUR_FIREBASE_PROJECT_ID'); // e.g. adildata-12345
+define('FIREBASE_PROJECT_ID', 'vtu-apps-5c6af');
 
 /**
  * Generate a Google OAuth2 access token from a Service Account JSON.
