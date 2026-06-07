@@ -145,3 +145,22 @@ function fcm_send_to_tokens($tokens, $title, $body, $data = []) {
     }
     return $results;
 }
+
+/**
+ * Convenience: look up a user's FCM tokens from DB and send them a push.
+ * Call this from any transaction file — no boilerplate needed.
+ *
+ * @param mysqli $conn   Active DB connection
+ * @param string $email  User's email (used as device_tokens.email key)
+ * @param string $title
+ * @param string $body
+ * @param array  $data   Optional extra payload (e.g. ['screen' => 'Transactions'])
+ */
+function sendUserPushNotification($conn, $email, $title, $body, $data = []) {
+    $emailSafe = mysqli_real_escape_string($conn, $email);
+    $q = mysqli_query($conn, "SELECT fcm_token FROM device_tokens WHERE email='$emailSafe'");
+    if (!$q || mysqli_num_rows($q) === 0) return;
+    $tokens = [];
+    while ($row = mysqli_fetch_assoc($q)) { $tokens[] = $row['fcm_token']; }
+    fcm_send_to_tokens($tokens, $title, $body, $data);
+}
