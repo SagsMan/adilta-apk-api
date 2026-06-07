@@ -26,6 +26,7 @@ $log_file = __DIR__ . '/logs/webhook_monnify.log';
 
 // ── DB connection ─────────────────────────────────────────────────────────────
 $connect = mysqli_connect('localhost', 'adiliqgs_adildata', 'adildata2026', 'adiliqgs_adildata', 3306);
+include_once __DIR__ . '/fcm_helper.php';
 if (!$connect) {
     http_response_code(500);
     @file_put_contents($log_file, date('Y-m-d H:i:s') . " | DB_CONNECT_FAILED\n", FILE_APPEND | LOCK_EX);
@@ -120,6 +121,19 @@ if ($event_type === 'SUCCESSFUL_TRANSACTION' && !empty($email) && !empty($refere
         FILE_APPEND | LOCK_EX);
 
     if ($walletOk && $historyOk) {
+        // Send push notification to user's device(s)
+        $pushTokensQ = mysqli_query($connect, "SELECT fcm_token FROM device_tokens WHERE email='$emailSafe'");
+        if ($pushTokensQ && mysqli_num_rows($pushTokensQ) > 0) {
+            $pushTokens = [];
+            while ($pushRow = mysqli_fetch_assoc($pushTokensQ)) { $pushTokens[] = $pushRow['fcm_token']; }
+            $fmtAmt = '\u20a6' . number_format($amount_to_add, 2);
+            $fmtBal = '\u20a6' . number_format($new_balance, 2);
+            fcm_send_to_tokens($pushTokens, '\ud83d\udcb0 Wallet Funded!',
+                "Your wallet has been credited with {$fmtAmt}. New balance: {$fmtBal}.",
+                ['type' => 'wallet_credit', 'amount' => (string)$amount_to_add,
+                 'new_balance' => (string)$new_balance, 'reference' => $reference, 'screen' => 'Wallet']);
+            @file_put_contents($log_file, date('Y-m-d H:i:s') . " | PUSH_SENT tokens=" . count($pushTokens) . "\n", FILE_APPEND | LOCK_EX);
+        }
         echo json_encode(['status' => 'OK', 'credited' => $amount_to_add, 'new_balance' => $new_balance]);
     } else {
         http_response_code(500);
