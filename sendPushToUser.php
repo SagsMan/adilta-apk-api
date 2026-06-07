@@ -24,7 +24,7 @@ header("Content-Type: application/json");
 include_once 'conn.php';
 include_once 'fcm_helper.php';
 
-define('ADMIN_SECRET_KEY', 'CHANGE_THIS_TO_A_LONG_RANDOM_STRING'); // Set a strong secret!
+define('ADMIN_SECRET_KEY', 'ada211ba7f6ee3bdb9814d174fae1520c1265d10775b27c5f2cf7fc7b167e3f0'); // Set a strong secret!
 
 $data     = json_decode(file_get_contents("php://input"), true);
 $response = ["success" => false, "message" => ""];
