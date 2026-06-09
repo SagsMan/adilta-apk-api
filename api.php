@@ -108,22 +108,22 @@ function monnify_login($creds) {
 
 /**
  * Create a Monnify reserved account for a user.
- * BVN is REQUIRED for Monnify production. Only call this after BVN is submitted.
+ * CBN policy: BVN OR NIN is accepted — either is sufficient.
  */
-function monnify_create_reserved_account($conn, $email, $fullName, $userId, $bvn = '') {
+function monnify_create_reserved_account($conn, $email, $fullName, $userId, $bvn = '', $nin = '') {
     $creds = monnify_get_credentials($conn);
     if (empty($creds['api_key']) || empty($creds['contract'])) {
         return ['success' => false, 'message' => 'Monnify credentials not configured'];
     }
-    if (empty($bvn)) {
-        return ['success' => false, 'message' => 'BVN is required to generate a Monnify virtual account'];
+    if (empty($bvn) && empty($nin)) {
+        return ['success' => false, 'message' => 'BVN or NIN is required to generate a virtual account'];
     }
 
     $token = monnify_login($creds);
     if (!$token) return ['success' => false, 'message' => 'Monnify authentication failed'];
 
-    $accountRef = 'ADIL_' . intval($userId) . '_' . time();
-    $payload    = json_encode([
+    $accountRef  = 'ADIL_' . intval($userId) . '_' . time();
+    $payloadArr  = [
         'accountReference'    => $accountRef,
         'accountName'         => $fullName,
         'currencyCode'        => 'NGN',
@@ -131,8 +131,10 @@ function monnify_create_reserved_account($conn, $email, $fullName, $userId, $bvn
         'customerEmail'       => $email,
         'customerName'        => $fullName,
         'getAllAvailableBanks' => true,
-        'bvn'                 => $bvn,
-    ]);
+    ];
+    if (!empty($bvn)) $payloadArr['bvn'] = $bvn;
+    if (!empty($nin)) $payloadArr['nin'] = $nin;
+    $payload = json_encode($payloadArr);
 
     $ch = curl_init();
     curl_setopt_array($ch, [
@@ -472,13 +474,13 @@ case 'generate_monnify':
         ]);
     }
 
-    // BVN is required by Monnify production
-    if (empty($user['bvn'])) {
-        api_error('BVN required. Please submit your BVN via the KYC section first.', 422);
+    // CBN policy: BVN or NIN accepted
+    if (empty($user['bvn']) && empty($user['nin'])) {
+        api_error('Please submit your BVN or NIN via the KYC section first.', 422);
     }
 
     $fullName = trim($user['sname'] . ' ' . $user['oname']);
-    $result   = monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn']);
+    $result   = monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $user['bvn'] ?? '', $user['nin'] ?? '');
 
     if (!$result['success']) {
         api_error($result['message'] ?? 'Account generation failed', 422);
@@ -555,14 +557,24 @@ case 'submit_kyc':
     if (empty($sets)) api_error('BVN and NIN must be 11 digits');
     mysqli_query($conn, "UPDATE users_tbl SET " . implode(', ', $sets) . " WHERE email='$em'");
 
-    // Auto-generate Monnify account if BVN was submitted and user doesn't have one yet
+    // CBN policy: BVN OR NIN is enough — auto-generate account after any KYC submission
     $monnifyResult = null;
-    if (!empty($bvn) && empty($user['monnify_account_details'])) {
+    $bvnToUse = !empty($bvn) ? $bvn : ($user['bvn'] ?? '');
+    $ninToUse = !empty($nin) ? $nin : ($user['nin'] ?? '');
+    if ((!empty($bvnToUse) || !empty($ninToUse)) && empty($user['monnify_account_details'])) {
         $fullName      = trim($user['sname'] . ' ' . $user['oname']);
-        $monnifyResult = monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $bvn);
+        $monnifyResult = monnify_create_reserved_account($conn, $user['email'], $fullName, $user['id'], $bvnToUse, $ninToUse);
     }
 
-    $responseData = ['message' => 'KYC submitted successfully'];
+    // Re-fetch user to get latest bvn/nin after update
+      $uq2 = mysqli_query($conn, "SELECT bvn, nin, monnify_account_details FROM users_tbl WHERE email='$em' LIMIT 1");
+      $freshUser = $uq2 ? (mysqli_fetch_assoc($uq2) ?: []) : [];
+      $hasBvnNow = !empty($freshUser['bvn']);
+      $hasNinNow = !empty($freshUser['nin']);
+      $hasMonnifyNow = !empty($freshUser['monnify_account_details']);
+
+      $setupMsg = $hasMonnifyNow ? '' : ($hasBvnNow ? 'Generating your account shortly.' : 'Generating your virtual account, please check back shortly.');
+      $responseData = ['message' => 'KYC submitted successfully', 'needs_bvn' => !$hasBvnNow, 'setup_message' => $setupMsg];
     if ($monnifyResult && $monnifyResult['success']) {
         $accounts = parse_monnify_accounts($monnifyResult['raw'] ?? '');
         $primary  = $accounts[0] ?? null;
@@ -608,7 +620,7 @@ case 'get_kyc_status':
         'accounts'       => $accounts,
         'setup_message'  => (!$hasBvn && !$hasNin)
             ? 'Submit your BVN or NIN to activate your virtual account.'
-            : ($hasMonnify ? '' : 'Your account is being set up. Please check back shortly.'),
+            : ($hasMonnify ? '' : 'Generating your virtual account, please check back shortly.'),
     ]);
     break;
 
